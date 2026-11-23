@@ -16,7 +16,12 @@ sources, and it is only written to state when the two sides' medians
 agree within 1%. The median itself is computed by deterministic code
 from the extracted prices, never copied from model output, so the
 model's job is only to read numbers off pages — it never decides the
-attested price.
+attested price. Before any result is stored, the validator verifies
+the complete result: the per-source price list must be valid, its
+recomputed median must match the accepted price, and the loaded/failed
+counts must be consistent with that list and the requested sources —
+so a stored attestation stands on its own numbers, not on the
+leader's word.
 
 ## What it does
 
@@ -83,6 +88,17 @@ same number, and a byte-equality bar would fail honest validators for
 no reason. What the tolerance does not forgive is a wrong read: a
 validator that misread a price by more than 1% disagrees, and so does
 one that read a different pair.
+
+**The validator verifies the complete stored result.** Median
+agreement alone does not prove the leader's numbers add up, so the
+validator also checks the leader's result as a whole before agreeing:
+the per-source price list must be valid (one positive integer per
+loaded source), the median recomputed from that list must match the
+accepted price exactly, and `sources_loaded` plus `sources_failed`
+must equal the number of sources that were requested (with the list
+length equal to `sources_loaded`). The same check runs once more in
+`attest_price` before the result is stored, so a stored attestation
+is verified end to end, not just agreed on.
 
 **Two of three sources is enough.** Each source is fetched
 independently and a failure is skipped, not fatal: with two sources
@@ -221,7 +237,12 @@ Direct tests (mocked web + LLM, no network) live in
 cover request validation and pair normalization, a successful
 attestation with the median and the one-hour validity window, validator
 agreement and disagreement (a 0.46% gap agrees, a 7.7% gap disagrees,
-via mock swapping between leader and replay), two-of-three sources
+via mock swapping between leader and replay), validator rejection of
+inconsistent leader results (median not matching the recomputed
+median of the price list, `sources_loaded` not matching the list
+length, loaded plus failed not matching the requested sources, a
+non-positive price in the list — all via fabricated leader results
+passed to `run_validator`), two-of-three sources
 loading (median becomes the integer average), fewer than two loading
 (`[EXTERNAL]` for 4xx, `[TRANSIENT]` for 429), malformed model answers
 (`[LLM_ERROR]`: missing prices, a price for a source that did not load,
