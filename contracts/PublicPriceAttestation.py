@@ -19,6 +19,10 @@ two medians must land within 1% of each other. A single stale or
 manipulated feed cannot move the attestation: the median of two or
 three independent sources absorbs one outlier, and a round where fewer
 than two sources load fails instead of storing a one-feed price.
+Before any result is stored, the validator verifies the complete
+result: the per-source price list must be valid, its recomputed
+median must match the accepted price, and the loaded/failed counts
+must be consistent with that list and the requested sources.
 
 Prices go stale, so attestations expire. An attestation is fresh for
 one hour after verification; after that it stays readable as history
@@ -315,6 +319,55 @@ def _validate_prices(answer, loaded: list) -> list:
     return prices
 
 
+def _verify_attestation_result(result: dict, requested_sources: list) -> bool:
+    """Verify a complete attestation result before anyone trusts it.
+
+    The result a consensus round stores must stand on its own: the
+    per-source price list is valid (one positive integer per loaded
+    source), the median recomputed from that list matches the
+    accepted price exactly, and the loaded/failed counts add up to
+    the sources that were requested. A leader that reports a median
+    its own price list does not support, or counts that do not match
+    its list, is not agreed with — the numbers in the stored record
+    must check out, not rest on the leader's word.
+    """
+    if not isinstance(result, dict):
+        return False
+    prices = result.get("prices")
+    if not isinstance(prices, list):
+        return False
+    if len(prices) < MIN_SOURCES:
+        return False
+    for price in prices:
+        if (
+            not isinstance(price, int)
+            or isinstance(price, bool)
+            or price <= 0
+        ):
+            return False
+    loaded = result.get("sources_loaded")
+    failed = result.get("sources_failed")
+    if (
+        not isinstance(loaded, int)
+        or isinstance(loaded, bool)
+        or not isinstance(failed, int)
+        or isinstance(failed, bool)
+    ):
+        return False
+    if len(prices) != loaded:
+        return False
+    if loaded + failed != len(requested_sources):
+        return False
+    accepted = result.get("price")
+    if (
+        not isinstance(accepted, int)
+        or isinstance(accepted, bool)
+        or accepted <= 0
+    ):
+        return False
+    return _median(prices) == u256(accepted)
+
+
 # --------------------------------------------------------------------------
 # Consensus worker (module level: it takes plain values, touches no
 # storage, and is shared by leader and validators, so both sides run
@@ -446,6 +499,12 @@ class PublicPriceAttestation(gl.Contract):
     # and no strict_eq is used on any LLM output anywhere in this
     # contract: a byte-equality check on extracted prices would fail
     # whenever two validators read the same live price seconds apart.
+    # The validator also verifies the leader's complete result before
+    # agreeing: a valid per-source price list, the median recomputed
+    # from that list matching the accepted price, and loaded/failed
+    # counts consistent with the list and the requested sources. The
+    # same check runs once more in attest_price before the result is
+    # stored, so the stored record is verified as a whole.
     def _attest_with_consensus(self, pair: str, sources: list) -> dict:
         def leader_fn() -> dict:
             return _judge(pair, sources)
@@ -472,6 +531,13 @@ class PublicPriceAttestation(gl.Contract):
             if leader.get("sources_loaded", 0) < MIN_SOURCES:
                 return False
             if mine["sources_loaded"] < MIN_SOURCES:
+                return False
+            # The stored result must stand on its own: a valid
+            # per-source price list, a median recomputed from that
+            # list matching the accepted price, and loaded/failed
+            # counts consistent with the list and the requested
+            # sources.
+            if not _verify_attestation_result(leader, sources):
                 return False
             return _within_tolerance(mine["price"], u256(int(leader_price)))
 
@@ -517,6 +583,12 @@ class PublicPriceAttestation(gl.Contract):
         pair = request_mem.pair
         sources = request_mem.sources.split("\n")
         result = self._attest_with_consensus(pair, sources)
+        # The record that gets stored must verify as a whole, even
+        # though consensus already checked it: a valid per-source
+        # price list, a median recomputed from that list, and counts
+        # consistent with the requested sources.
+        if not _verify_attestation_result(result, sources):
+            _fail(ERR_EXPECTED, "consensus result failed attestation verification")
         verified_at = _now_seconds()
         self.attestation_counter = self.attestation_counter + u256(1)
         attestation_id = self.attestation_counter
