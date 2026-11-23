@@ -13,7 +13,7 @@
   (`1zr6nqk...`); the contract targets the boilerplate's runner, and
   moving to a newer runner requires the renamed APIs, not just the hash —
   do not change the hash alone.
-- Direct tests: 17 passed
+- Direct tests: 22 passed
   (`./.venv/bin/python -m pytest tests/direct -q`).
 
 ## Constructor
@@ -76,7 +76,12 @@ check the live price first and accept anything within a few percent.
 Then call `get_attestation(1)` and confirm: `price` matches the
 returned price, `prices` has one entry per loaded source (each with
 `source` and `price`), `sources_loaded` is 2 or 3, `valid_until` is
-exactly one hour after `verified_at`, `status: "CURRENT"`. Call
+exactly one hour after `verified_at`, `status: "CURRENT"`. Check the
+stored result as a whole: recompute the median from the `prices`
+list (middle value with three, integer average of the two with two)
+and confirm it equals `price`, confirm the list length equals
+`sources_loaded`, and confirm `sources_loaded` plus
+`sources_failed` equals the number of sources requested. Call
 `get_request(1)` and confirm `status: "ATTESTED"`.
 
 If it reverts with `[TRANSIENT]`, a source was briefly unreachable —
