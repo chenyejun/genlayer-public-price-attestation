@@ -211,6 +211,79 @@ def test_validator_disagrees_when_median_gap_exceeds_tolerance(direct_vm, direct
     assert direct_vm.run_validator() is False
 
 
+def _leader_result(prices, price, loaded, failed):
+    """A leader's attestation result, as the validator receives it."""
+    return {
+        "prices": list(prices),
+        "price": price,
+        "sources_loaded": loaded,
+        "sources_failed": failed,
+    }
+
+
+def test_validator_rejects_median_mismatch(direct_vm, direct_deploy):
+    contract = direct_deploy("contracts/PublicPriceAttestation.py")
+    _request(direct_vm, contract)
+    _attest_3_sources(direct_vm, contract)
+
+    # The price list is valid and the counts add up, but the accepted
+    # price is 1% above the median the list supports. The gap is
+    # inside the 1% tolerance band, so only the recomputation check
+    # can catch it.
+    assert direct_vm.run_validator(
+        leader_result=_leader_result(
+            [P_CG, P_BIN, P_KRA], MEDIAN_3 + 650000000, 3, 0
+        )
+    ) is False
+
+
+def test_validator_rejects_sources_loaded_mismatch(direct_vm, direct_deploy):
+    contract = direct_deploy("contracts/PublicPriceAttestation.py")
+    _request(direct_vm, contract)
+    _attest_3_sources(direct_vm, contract)
+
+    # Three prices in the list, but the leader claims only two loaded.
+    assert direct_vm.run_validator(
+        leader_result=_leader_result([P_CG, P_BIN, P_KRA], MEDIAN_3, 2, 1)
+    ) is False
+
+
+def test_validator_rejects_sources_count_mismatch(direct_vm, direct_deploy):
+    contract = direct_deploy("contracts/PublicPriceAttestation.py")
+    _request(direct_vm, contract)
+    _attest_3_sources(direct_vm, contract)
+
+    # Two prices, two loaded, zero failed — but three sources were
+    # requested, so one source is unaccounted for.
+    assert direct_vm.run_validator(
+        leader_result=_leader_result([P_CG, P_BIN], MEDIAN_2, 2, 0)
+    ) is False
+
+
+def test_validator_rejects_non_positive_price_in_list(direct_vm, direct_deploy):
+    contract = direct_deploy("contracts/PublicPriceAttestation.py")
+    _request(direct_vm, contract)
+    _attest_3_sources(direct_vm, contract)
+
+    # A zero in the price list, even though the median and the counts
+    # look right.
+    assert direct_vm.run_validator(
+        leader_result=_leader_result([0, P_BIN, P_KRA], P_KRA, 3, 0)
+    ) is False
+
+
+def test_validator_accepts_two_source_result(direct_vm, direct_deploy):
+    contract = direct_deploy("contracts/PublicPriceAttestation.py")
+    _request(direct_vm, contract)
+    _attest_3_sources(direct_vm, contract)
+
+    # Two prices, two loaded, one failed: a complete, consistent
+    # result from a round where one source was down.
+    assert direct_vm.run_validator(
+        leader_result=_leader_result([P_CG, P_BIN], MEDIAN_2, 2, 1)
+    ) is True
+
+
 def test_two_sources_loading_is_enough(direct_vm, direct_deploy):
     contract = direct_deploy("contracts/PublicPriceAttestation.py")
     _request(direct_vm, contract)
